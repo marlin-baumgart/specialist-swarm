@@ -1,0 +1,387 @@
+openapi: "3.0.3"
+info:
+  title: Weather & Notifications API
+  description: |
+    A weather data and alert notifications service. Provides current conditions,
+    forecasts, and configurable alert subscriptions for weather events.
+  version: "1.0.0"
+  contact:
+    name: WeatherCo API Support
+    email: api-support@weatherco.example.com
+
+servers:
+  - url: https://api.weatherco.example.com/v1
+    description: Production
+  - url: https://sandbox.weatherco.example.com/v1
+    description: Sandbox
+
+security:
+  - apiKeyHeader: []
+
+paths:
+  /weather/current:
+    get:
+      operationId: getCurrentWeather
+      summary: Get current weather conditions
+      description: Returns current weather conditions for a given city or coordinate pair.
+      parameters:
+        - name: city
+          in: query
+          description: City name (e.g. "London", "Berlin"). Mutually exclusive with lat/lon.
+          schema:
+            type: string
+          example: London
+        - name: lat
+          in: query
+          description: Latitude. Must be used together with lon.
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+          example: 51.5074
+        - name: lon
+          in: query
+          description: Longitude. Must be used together with lat.
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
+          example: -0.1278
+        - name: units
+          in: query
+          description: Unit system for temperature and wind speed.
+          schema:
+            type: string
+            enum: [metric, imperial]
+            default: metric
+      responses:
+        "200":
+          description: Current weather conditions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentWeather"
+              example:
+                city: London
+                country: GB
+                timestamp: "2026-05-27T10:00:00Z"
+                temperature: 18.5
+                feels_like: 17.2
+                humidity: 65
+                wind_speed: 12.3
+                wind_direction: SW
+                condition: partly_cloudy
+                description: "Partly cloudy with occasional sunshine"
+                visibility_km: 10.0
+                pressure_hpa: 1013
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: City not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /weather/forecast:
+    get:
+      operationId: getWeatherForecast
+      summary: Get weather forecast
+      description: Returns a multi-day weather forecast for a given city.
+      parameters:
+        - name: city
+          in: query
+          required: true
+          description: City name
+          schema:
+            type: string
+          example: Berlin
+        - name: days
+          in: query
+          description: Number of forecast days (1-14)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 14
+            default: 5
+        - name: units
+          in: query
+          schema:
+            type: string
+            enum: [metric, imperial]
+            default: metric
+      responses:
+        "200":
+          description: Weather forecast
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Forecast"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /alerts:
+    get:
+      operationId: listAlerts
+      summary: List active alert subscriptions
+      description: Returns all active alert subscriptions for the authenticated API key.
+      responses:
+        "200":
+          description: List of alert subscriptions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alerts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AlertSubscription"
+                  total:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /alerts/subscribe:
+    post:
+      operationId: subscribeAlert
+      summary: Create an alert subscription
+      description: |
+        Subscribe to weather alerts for a city. When conditions match the alert
+        criteria, a webhook notification is sent to the provided callback URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertSubscribeRequest"
+            example:
+              city: London
+              conditions:
+                - temperature_above: 35
+                - wind_speed_above: 80
+              callback_url: https://myapp.example.com/webhooks/weather
+              name: "London heat & storm alert"
+      responses:
+        "201":
+          description: Alert subscription created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertSubscription"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Invalid alert conditions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /alerts/{alertId}:
+    delete:
+      operationId: unsubscribeAlert
+      summary: Delete an alert subscription
+      description: Remove an active alert subscription by its ID.
+      parameters:
+        - name: alertId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Alert subscription deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Alert subscription not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key provided during registration
+
+  schemas:
+    CurrentWeather:
+      type: object
+      required: [city, country, timestamp, temperature, humidity, condition]
+      properties:
+        city:
+          type: string
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code
+        timestamp:
+          type: string
+          format: date-time
+        temperature:
+          type: number
+          description: Temperature in requested units
+        feels_like:
+          type: number
+        humidity:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Relative humidity percentage
+        wind_speed:
+          type: number
+          description: Wind speed in km/h (metric) or mph (imperial)
+        wind_direction:
+          type: string
+          enum: [N, NE, E, SE, S, SW, W, NW]
+        condition:
+          type: string
+          enum: [clear, partly_cloudy, cloudy, overcast, rain, heavy_rain, thunderstorm, snow, fog, mist]
+        description:
+          type: string
+        visibility_km:
+          type: number
+        pressure_hpa:
+          type: number
+
+    ForecastDay:
+      type: object
+      required: [date, temp_high, temp_low, condition]
+      properties:
+        date:
+          type: string
+          format: date
+        temp_high:
+          type: number
+        temp_low:
+          type: number
+        condition:
+          type: string
+          enum: [clear, partly_cloudy, cloudy, overcast, rain, heavy_rain, thunderstorm, snow, fog, mist]
+        description:
+          type: string
+        precipitation_chance:
+          type: integer
+          minimum: 0
+          maximum: 100
+        wind_speed_avg:
+          type: number
+        humidity_avg:
+          type: integer
+
+    Forecast:
+      type: object
+      required: [city, days]
+      properties:
+        city:
+          type: string
+        country:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        days:
+          type: array
+          items:
+            $ref: "#/components/schemas/ForecastDay"
+
+    AlertSubscribeRequest:
+      type: object
+      required: [city, conditions, callback_url]
+      properties:
+        city:
+          type: string
+        conditions:
+          type: array
+          description: List of trigger conditions (any match triggers the alert)
+          items:
+            type: object
+            properties:
+              temperature_above:
+                type: number
+              temperature_below:
+                type: number
+              wind_speed_above:
+                type: number
+              condition_is:
+                type: string
+                enum: [rain, heavy_rain, thunderstorm, snow, fog]
+        callback_url:
+          type: string
+          format: uri
+          description: URL to receive webhook notifications
+        name:
+          type: string
+          description: Human-readable name for this subscription
+
+    AlertSubscription:
+      type: object
+      required: [id, city, conditions, callback_url, created_at, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        city:
+          type: string
+        conditions:
+          type: array
+          items:
+            type: object
+        callback_url:
+          type: string
+          format: uri
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, paused, expired]
+        last_triggered:
+          type: string
+          format: date-time
+          nullable: true
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          example: CITY_NOT_FOUND
+        message:
+          type: string
+          description: Human-readable error description
+          example: "The city 'Londn' was not found. Did you mean 'London'?"
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

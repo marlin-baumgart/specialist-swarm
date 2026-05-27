@@ -1,0 +1,788 @@
+openapi: "3.0.3"
+info:
+  title: Project Management API
+  description: |
+    A Jira-lite project management service. Supports projects, sprints, tasks,
+    comments, and assignments with a status state machine for task lifecycle.
+  version: "2.1.0"
+  contact:
+    name: TaskFlow API Team
+    email: api@taskflow.example.com
+
+servers:
+  - url: https://api.taskflow.example.com/v2
+    description: Production
+  - url: https://sandbox.taskflow.example.com/v2
+    description: Sandbox
+
+security:
+  - bearerAuth: []
+
+paths:
+  # --- Projects ---
+  /projects:
+    get:
+      operationId: listProjects
+      summary: List projects
+      description: Returns a paginated list of projects the authenticated user has access to.
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, all]
+            default: active
+      responses:
+        "200":
+          description: Paginated list of projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      operationId: createProject
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+            example:
+              name: "Q3 Platform Rewrite"
+              description: "Migrate monolith to microservices architecture"
+              team_members: ["usr_alice", "usr_bob", "usr_carol"]
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /projects/{projectId}:
+    get:
+      operationId: getProject
+      summary: Get project details
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      operationId: updateProject
+      summary: Update a project
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectRequest"
+      responses:
+        "200":
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: archiveProject
+      summary: Archive a project
+      description: Soft-deletes a project by moving it to archived status.
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "204":
+          description: Project archived
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # --- Sprints ---
+  /projects/{projectId}/sprints:
+    get:
+      operationId: listSprints
+      summary: List sprints in a project
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [planning, active, completed, all]
+            default: all
+      responses:
+        "200":
+          description: Paginated list of sprints
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SprintList"
+
+    post:
+      operationId: createSprint
+      summary: Create a sprint
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSprintRequest"
+            example:
+              name: "Sprint 14"
+              goal: "Complete auth service migration"
+              start_date: "2026-06-01"
+              end_date: "2026-06-14"
+      responses:
+        "201":
+          description: Sprint created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sprint"
+
+  /projects/{projectId}/sprints/{sprintId}:
+    get:
+      operationId: getSprint
+      summary: Get sprint details
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SprintId"
+      responses:
+        "200":
+          description: Sprint details with task summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SprintDetail"
+
+    patch:
+      operationId: updateSprint
+      summary: Update a sprint
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/SprintId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSprintRequest"
+      responses:
+        "200":
+          description: Sprint updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sprint"
+
+  # --- Tasks ---
+  /projects/{projectId}/tasks:
+    get:
+      operationId: listTasks
+      summary: List tasks in a project
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: sprint_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [backlog, todo, in_progress, in_review, done, blocked]
+        - name: assignee
+          in: query
+          schema:
+            type: string
+        - name: priority
+          in: query
+          schema:
+            type: string
+            enum: [critical, high, medium, low]
+      responses:
+        "200":
+          description: Paginated list of tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskList"
+
+    post:
+      operationId: createTask
+      summary: Create a task
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskRequest"
+            example:
+              title: "Implement OAuth2 PKCE flow"
+              description: "Replace implicit grant with PKCE for SPA clients"
+              sprint_id: "spr_abc123"
+              assignee: "usr_alice"
+              priority: high
+              story_points: 5
+              labels: ["auth", "security"]
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /projects/{projectId}/tasks/{taskId}:
+    get:
+      operationId: getTask
+      summary: Get task details
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TaskId"
+      responses:
+        "200":
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+    patch:
+      operationId: updateTask
+      summary: Update a task
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskRequest"
+      responses:
+        "200":
+          description: Task updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /projects/{projectId}/tasks/{taskId}/transition:
+    post:
+      operationId: transitionTask
+      summary: Transition task status
+      description: |
+        Move a task to a new status. Only valid transitions are allowed:
+        - backlog -> todo
+        - todo -> in_progress, blocked
+        - in_progress -> in_review, blocked, todo
+        - in_review -> done, in_progress
+        - blocked -> todo, in_progress
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to_status]
+              properties:
+                to_status:
+                  type: string
+                  enum: [backlog, todo, in_progress, in_review, done, blocked]
+                comment:
+                  type: string
+                  description: Optional comment explaining the transition
+            example:
+              to_status: in_review
+              comment: "Ready for code review — PR #142"
+      responses:
+        "200":
+          description: Task transitioned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "422":
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /projects/{projectId}/tasks/{taskId}/assign:
+    post:
+      operationId: assignTask
+      summary: Assign a task
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assignee]
+              properties:
+                assignee:
+                  type: string
+                  description: User ID of the assignee
+      responses:
+        "200":
+          description: Task assigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  # --- Comments ---
+  /projects/{projectId}/tasks/{taskId}/comments:
+    get:
+      operationId: listComments
+      summary: List comments on a task
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Paginated list of comments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentList"
+
+    post:
+      operationId: createComment
+      summary: Add a comment to a task
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                  maxLength: 10000
+      responses:
+        "201":
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OAuth2 access token obtained via authorization code flow
+
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^prj_[a-zA-Z0-9]{12}$"
+    SprintId:
+      name: sprintId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^spr_[a-zA-Z0-9]{12}$"
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^tsk_[a-zA-Z0-9]{12}$"
+    CursorParam:
+      name: cursor
+      in: query
+      description: Cursor for pagination. Pass the `next_cursor` from a previous response.
+      schema:
+        type: string
+    LimitParam:
+      name: limit
+      in: query
+      description: Number of items per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+
+  schemas:
+    Project:
+      type: object
+      required: [id, name, status, created_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [active, archived]
+        team_members:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        task_counts:
+          type: object
+          properties:
+            total:
+              type: integer
+            backlog:
+              type: integer
+            todo:
+              type: integer
+            in_progress:
+              type: integer
+            in_review:
+              type: integer
+            done:
+              type: integer
+            blocked:
+              type: integer
+
+    ProjectList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        next_cursor:
+          type: string
+          nullable: true
+        total:
+          type: integer
+
+    CreateProjectRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        team_members:
+          type: array
+          items:
+            type: string
+
+    UpdateProjectRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        team_members:
+          type: array
+          items:
+            type: string
+
+    Sprint:
+      type: object
+      required: [id, name, state, project_id]
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+        goal:
+          type: string
+        state:
+          type: string
+          enum: [planning, active, completed]
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        created_at:
+          type: string
+          format: date-time
+
+    SprintDetail:
+      allOf:
+        - $ref: "#/components/schemas/Sprint"
+        - type: object
+          properties:
+            task_summary:
+              type: object
+              properties:
+                total:
+                  type: integer
+                completed:
+                  type: integer
+                in_progress:
+                  type: integer
+                remaining_points:
+                  type: integer
+                total_points:
+                  type: integer
+            velocity:
+              type: number
+              description: Points completed per day so far
+
+    SprintList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Sprint"
+        next_cursor:
+          type: string
+          nullable: true
+
+    CreateSprintRequest:
+      type: object
+      required: [name, start_date, end_date]
+      properties:
+        name:
+          type: string
+        goal:
+          type: string
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+
+    UpdateSprintRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        goal:
+          type: string
+        state:
+          type: string
+          enum: [planning, active, completed]
+        end_date:
+          type: string
+          format: date
+
+    Task:
+      type: object
+      required: [id, title, status, project_id, created_at]
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        sprint_id:
+          type: string
+          nullable: true
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [backlog, todo, in_progress, in_review, done, blocked]
+        assignee:
+          type: string
+          nullable: true
+        priority:
+          type: string
+          enum: [critical, high, medium, low]
+          default: medium
+        story_points:
+          type: integer
+          minimum: 1
+          maximum: 21
+        labels:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        comment_count:
+          type: integer
+
+    TaskList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+        next_cursor:
+          type: string
+          nullable: true
+        total:
+          type: integer
+
+    CreateTaskRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+        description:
+          type: string
+          maxLength: 10000
+        sprint_id:
+          type: string
+        assignee:
+          type: string
+        priority:
+          type: string
+          enum: [critical, high, medium, low]
+        story_points:
+          type: integer
+          minimum: 1
+          maximum: 21
+        labels:
+          type: array
+          items:
+            type: string
+
+    UpdateTaskRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        sprint_id:
+          type: string
+          nullable: true
+        priority:
+          type: string
+          enum: [critical, high, medium, low]
+        story_points:
+          type: integer
+        labels:
+          type: array
+          items:
+            type: string
+
+    Comment:
+      type: object
+      required: [id, body, author, created_at]
+      properties:
+        id:
+          type: string
+        body:
+          type: string
+        author:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CommentList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Comment"
+        next_cursor:
+          type: string
+          nullable: true
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: INVALID_TRANSITION
+        message:
+          type: string
+          example: "Cannot transition from 'backlog' to 'done' directly"
+        details:
+          type: object
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

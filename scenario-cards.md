@@ -60,6 +60,26 @@ Each team picks ONE scenario. Each is shaped like real services-firm work: a coo
 
 ---
 
+## Card D — MCP Server Builder
+
+**Coordinator:** "Lead Platform Architect"
+- Reads a chosen OpenAPI spec and feature requirements doc
+- Orchestrates specialists in a two-phase fan-out pattern (analyse → build → polish)
+- Assembles the final repo from specialist outputs
+
+**Specialists:**
+1. **API Analyst** (skill: api-analysis-playbook) — parses the OpenAPI spec, produces an API capability map (endpoints, auth schemes, schemas, error patterns, rate limits)
+2. **MCP Architect** (skill: mcp-design-patterns) — reads feature requirements, designs MCP tool/resource/prompt schemas with composition patterns
+3. **Code Generator** (skill: typescript-mcp-scaffold) — consumes both analyses, writes the full TypeScript MCP server (src, types, HTTP client, mock server)
+4. **Documentation Writer** (skill: documentation-standards) — produces README, architecture overview, setup guide, and a Group IT `.docx`
+5. **QA Validator** (skill: mcp-validation-checklist) — reviews code for correctness, validates tool schemas match the design, checks the server boots
+
+**The trigger:** A chosen OpenAPI spec from `synthetic-data/api-specs/` (3 tiers of complexity) + `synthetic-data/feature-requirements.md`
+
+**The deliverable:** A complete, runnable TypeScript MCP server repo at `outputs/mcp-server/` plus `outputs/mcp-server-documentation.docx`
+
+---
+
 ## Picking guidance
 
 | If your team is... | Pick |
@@ -67,3 +87,4 @@ Each team picks ONE scenario. Each is shaped like real services-firm work: a coo
 | Just want the cleanest path | A (Deal Desk — code is ready) |
 | Most senior partner audience | B (M&A — gravitas) |
 | Most relatable to HR / people-ops clients | C (Hiring) |
+| Most technical / platform-builder crowd | D (MCP Server Builder) |

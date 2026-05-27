@@ -1,0 +1,1338 @@
+openapi: "3.0.3"
+info:
+  title: E-Commerce & Inventory API
+  description: |
+    A full e-commerce platform with inventory management, order lifecycle,
+    payments, shipping, and webhook integrations. Supports OAuth2 with
+    refresh tokens, pagination, rate limiting, and idempotency keys.
+  version: "3.0.0"
+  contact:
+    name: ShopStack API Team
+    email: developers@shopstack.example.com
+
+servers:
+  - url: https://api.shopstack.example.com/v3
+    description: Production (rate limit 1000 req/min)
+  - url: https://sandbox.shopstack.example.com/v3
+    description: Sandbox (rate limit 100 req/min)
+
+security:
+  - oauth2: [read, write]
+
+paths:
+  # --- Products ---
+  /products:
+    get:
+      operationId: searchProducts
+      summary: Search products
+      description: Full-text search across products with filtering and sorting.
+      parameters:
+        - name: q
+          in: query
+          description: Search query (searches name, description, SKU)
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: min_price
+          in: query
+          schema:
+            type: number
+        - name: max_price
+          in: query
+          schema:
+            type: number
+        - name: in_stock
+          in: query
+          schema:
+            type: boolean
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [relevance, price_asc, price_desc, newest, bestselling]
+            default: relevance
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSearchResult"
+          headers:
+            X-RateLimit-Remaining:
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              schema:
+                type: integer
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    post:
+      operationId: createProduct
+      summary: Create a product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductRequest"
+      responses:
+        "201":
+          description: Product created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+  /products/{productId}:
+    get:
+      operationId: getProduct
+      summary: Get product details
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      responses:
+        "200":
+          description: Product details with inventory summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductDetail"
+
+    patch:
+      operationId: updateProduct
+      summary: Update a product
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProductRequest"
+      responses:
+        "200":
+          description: Product updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+    delete:
+      operationId: deleteProduct
+      summary: Delete a product
+      description: Soft-deletes a product. Active orders are not affected.
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      responses:
+        "204":
+          description: Product deleted
+
+  # --- Inventory ---
+  /inventory/{sku}:
+    get:
+      operationId: getInventory
+      summary: Get inventory for a SKU
+      parameters:
+        - $ref: "#/components/parameters/SkuParam"
+      responses:
+        "200":
+          description: Inventory details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+
+  /inventory/{sku}/reserve:
+    post:
+      operationId: reserveInventory
+      summary: Reserve inventory
+      description: |
+        Temporarily reserves inventory for a pending order. Reservation expires
+        after 15 minutes unless confirmed. Supports idempotency keys.
+      parameters:
+        - $ref: "#/components/parameters/SkuParam"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity]
+              properties:
+                quantity:
+                  type: integer
+                  minimum: 1
+                order_reference:
+                  type: string
+      responses:
+        "200":
+          description: Inventory reserved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "409":
+          description: Insufficient inventory
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /inventory/{sku}/release:
+    post:
+      operationId: releaseInventory
+      summary: Release reserved inventory
+      parameters:
+        - $ref: "#/components/parameters/SkuParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reservation_id]
+              properties:
+                reservation_id:
+                  type: string
+      responses:
+        "200":
+          description: Inventory released
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+
+  /inventory/low-stock:
+    get:
+      operationId: getLowStockItems
+      summary: List low-stock items
+      description: Returns items where available quantity is below the reorder threshold.
+      parameters:
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Low stock items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryList"
+
+  # --- Orders ---
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List orders
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, confirmed, processing, shipped, delivered, cancelled, refunded]
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Paginated order list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderList"
+
+    post:
+      operationId: createOrder
+      summary: Create an order
+      description: |
+        Creates a new order. Does NOT automatically reserve inventory or initiate
+        payment — those must be done separately via the inventory and payment endpoints.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: Order created in pending status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Get order details
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: Full order details with line items and history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderDetail"
+
+  /orders/{orderId}/confirm:
+    post:
+      operationId: confirmOrder
+      summary: Confirm an order
+      description: Moves order from pending to confirmed. Requires inventory reservation and payment.
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_id, reservation_ids]
+              properties:
+                payment_id:
+                  type: string
+                reservation_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Order confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "422":
+          description: Missing payment or reservation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /orders/{orderId}/cancel:
+    post:
+      operationId: cancelOrder
+      summary: Cancel an order
+      description: Cancels an order. Releases inventory and initiates refund if payment was captured.
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Order cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  # --- Payments ---
+  /payments:
+    post:
+      operationId: initiatePayment
+      summary: Initiate a payment
+      description: Creates a payment intent. Does not capture funds until the order is confirmed.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentRequest"
+      responses:
+        "201":
+          description: Payment intent created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
+  /payments/{paymentId}:
+    get:
+      operationId: getPayment
+      summary: Get payment details
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
+  /payments/{paymentId}/refund:
+    post:
+      operationId: processRefund
+      summary: Process a refund
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount:
+                  type: number
+                  description: Refund amount (must be <= captured amount)
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Refund processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refund"
+
+  # --- Customers ---
+  /customers/{customerId}:
+    get:
+      operationId: getCustomer
+      summary: Get customer profile
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "200":
+          description: Customer profile with order summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+
+  /customers/{customerId}/orders:
+    get:
+      operationId: listCustomerOrders
+      summary: List orders for a customer
+      parameters:
+        - $ref: "#/components/parameters/CustomerId"
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Customer's orders
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderList"
+
+  # --- Shipping ---
+  /shipping/rates:
+    post:
+      operationId: getShippingRates
+      summary: Get shipping rates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShippingRateRequest"
+      responses:
+        "200":
+          description: Available shipping options with rates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShippingRateResponse"
+
+  /shipping/shipments:
+    post:
+      operationId: createShipment
+      summary: Create a shipment
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateShipmentRequest"
+      responses:
+        "201":
+          description: Shipment created with tracking
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Shipment"
+
+  /shipping/shipments/{shipmentId}/track:
+    get:
+      operationId: trackShipment
+      summary: Track a shipment
+      parameters:
+        - name: shipmentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tracking events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackingInfo"
+
+  # --- Webhooks ---
+  /webhooks:
+    get:
+      operationId: listWebhooks
+      summary: List registered webhooks
+      responses:
+        "200":
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Webhook"
+
+    post:
+      operationId: registerWebhook
+      summary: Register a webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebhookRequest"
+      responses:
+        "201":
+          description: Webhook registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+
+  /webhooks/{webhookId}:
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      parameters:
+        - name: webhookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Webhook deleted
+
+  # --- Reports ---
+  /reports/sales:
+    get:
+      operationId: getSalesReport
+      summary: Get sales report
+      parameters:
+        - name: start_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: day
+      responses:
+        "200":
+          description: Sales report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalesReport"
+
+  /reports/inventory:
+    get:
+      operationId: getInventoryReport
+      summary: Get inventory report
+      description: Aggregated view of inventory health across all SKUs.
+      responses:
+        "200":
+          description: Inventory report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryReport"
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.shopstack.example.com/authorize
+          tokenUrl: https://auth.shopstack.example.com/token
+          refreshUrl: https://auth.shopstack.example.com/token
+          scopes:
+            read: Read access to resources
+            write: Write access to resources
+            admin: Administrative access
+
+  parameters:
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      schema:
+        type: string
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+    PaymentId:
+      name: paymentId
+      in: path
+      required: true
+      schema:
+        type: string
+    CustomerId:
+      name: customerId
+      in: path
+      required: true
+      schema:
+        type: string
+    SkuParam:
+      name: sku
+      in: path
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Unique key to ensure idempotent requests. Recommended format is UUIDv4.
+      schema:
+        type: string
+        format: uuid
+    CursorParam:
+      name: cursor
+      in: query
+      description: Cursor for pagination
+      schema:
+        type: string
+    OffsetParam:
+      name: offset
+      in: query
+      description: Offset for pagination
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    LimitParam:
+      name: limit
+      in: query
+      description: Items per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+
+  schemas:
+    Product:
+      type: object
+      required: [id, name, sku, price, status]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        sku:
+          type: string
+        price:
+          type: number
+        compare_at_price:
+          type: number
+          nullable: true
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [active, draft, archived]
+        images:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+                format: uri
+              alt:
+                type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ProductDetail:
+      allOf:
+        - $ref: "#/components/schemas/Product"
+        - type: object
+          properties:
+            inventory:
+              $ref: "#/components/schemas/InventoryItem"
+            variants:
+              type: array
+              items:
+                type: object
+                properties:
+                  sku:
+                    type: string
+                  name:
+                    type: string
+                  price_modifier:
+                    type: number
+                  available:
+                    type: integer
+
+    ProductSearchResult:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+
+    CreateProductRequest:
+      type: object
+      required: [name, sku, price]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        sku:
+          type: string
+        price:
+          type: number
+          minimum: 0
+        compare_at_price:
+          type: number
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        initial_stock:
+          type: integer
+          minimum: 0
+
+    UpdateProductRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        compare_at_price:
+          type: number
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [active, draft, archived]
+
+    InventoryItem:
+      type: object
+      required: [sku, available, reserved, total]
+      properties:
+        sku:
+          type: string
+        available:
+          type: integer
+        reserved:
+          type: integer
+        total:
+          type: integer
+        reorder_threshold:
+          type: integer
+        reorder_quantity:
+          type: integer
+        warehouse:
+          type: string
+        last_restocked:
+          type: string
+          format: date-time
+
+    InventoryList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryItem"
+        total:
+          type: integer
+        offset:
+          type: integer
+
+    Reservation:
+      type: object
+      required: [id, sku, quantity, expires_at]
+      properties:
+        id:
+          type: string
+        sku:
+          type: string
+        quantity:
+          type: integer
+        order_reference:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      required: [id, status, customer_id, total, created_at]
+      properties:
+        id:
+          type: string
+        customer_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, confirmed, processing, shipped, delivered, cancelled, refunded]
+        total:
+          type: number
+        subtotal:
+          type: number
+        tax:
+          type: number
+        shipping_cost:
+          type: number
+        currency:
+          type: string
+          default: USD
+        line_item_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OrderDetail:
+      allOf:
+        - $ref: "#/components/schemas/Order"
+        - type: object
+          properties:
+            line_items:
+              type: array
+              items:
+                type: object
+                properties:
+                  product_id:
+                    type: string
+                  sku:
+                    type: string
+                  name:
+                    type: string
+                  quantity:
+                    type: integer
+                  unit_price:
+                    type: number
+                  total:
+                    type: number
+            shipping_address:
+              $ref: "#/components/schemas/Address"
+            billing_address:
+              $ref: "#/components/schemas/Address"
+            payment:
+              $ref: "#/components/schemas/Payment"
+            shipment:
+              $ref: "#/components/schemas/Shipment"
+            history:
+              type: array
+              items:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time
+                  note:
+                    type: string
+
+    OrderList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+        next_cursor:
+          type: string
+          nullable: true
+        total:
+          type: integer
+
+    CreateOrderRequest:
+      type: object
+      required: [customer_id, line_items, shipping_address]
+      properties:
+        customer_id:
+          type: string
+        line_items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [sku, quantity]
+            properties:
+              sku:
+                type: string
+              quantity:
+                type: integer
+                minimum: 1
+        shipping_address:
+          $ref: "#/components/schemas/Address"
+        billing_address:
+          $ref: "#/components/schemas/Address"
+        shipping_method:
+          type: string
+        notes:
+          type: string
+
+    Address:
+      type: object
+      required: [line1, city, country, postal_code]
+      properties:
+        line1:
+          type: string
+        line2:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        country:
+          type: string
+        postal_code:
+          type: string
+
+    Payment:
+      type: object
+      required: [id, amount, currency, status]
+      properties:
+        id:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [pending, authorized, captured, failed, refunded, partially_refunded]
+        method:
+          type: string
+          enum: [credit_card, debit_card, bank_transfer, wallet]
+        created_at:
+          type: string
+          format: date-time
+
+    PaymentRequest:
+      type: object
+      required: [amount, currency, method]
+      properties:
+        amount:
+          type: number
+          minimum: 0.01
+        currency:
+          type: string
+          enum: [USD, EUR, GBP]
+        method:
+          type: string
+          enum: [credit_card, debit_card, bank_transfer, wallet]
+        order_id:
+          type: string
+
+    Refund:
+      type: object
+      required: [id, payment_id, amount, status]
+      properties:
+        id:
+          type: string
+        payment_id:
+          type: string
+        amount:
+          type: number
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [pending, processed, failed]
+        created_at:
+          type: string
+          format: date-time
+
+    Customer:
+      type: object
+      required: [id, email, name]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        phone:
+          type: string
+        default_address:
+          $ref: "#/components/schemas/Address"
+        order_count:
+          type: integer
+        total_spent:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+
+    ShippingRateRequest:
+      type: object
+      required: [origin, destination, items]
+      properties:
+        origin:
+          $ref: "#/components/schemas/Address"
+        destination:
+          $ref: "#/components/schemas/Address"
+        items:
+          type: array
+          items:
+            type: object
+            required: [weight_kg, quantity]
+            properties:
+              sku:
+                type: string
+              weight_kg:
+                type: number
+              quantity:
+                type: integer
+
+    ShippingRateResponse:
+      type: object
+      properties:
+        rates:
+          type: array
+          items:
+            type: object
+            properties:
+              carrier:
+                type: string
+              service:
+                type: string
+              rate:
+                type: number
+              currency:
+                type: string
+              estimated_days:
+                type: integer
+              tracking_available:
+                type: boolean
+
+    CreateShipmentRequest:
+      type: object
+      required: [order_id, carrier, service]
+      properties:
+        order_id:
+          type: string
+        carrier:
+          type: string
+        service:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              sku:
+                type: string
+              quantity:
+                type: integer
+
+    Shipment:
+      type: object
+      required: [id, order_id, carrier, status]
+      properties:
+        id:
+          type: string
+        order_id:
+          type: string
+        carrier:
+          type: string
+        service:
+          type: string
+        tracking_number:
+          type: string
+        status:
+          type: string
+          enum: [label_created, picked_up, in_transit, out_for_delivery, delivered, exception]
+        estimated_delivery:
+          type: string
+          format: date
+        created_at:
+          type: string
+          format: date-time
+
+    TrackingInfo:
+      type: object
+      properties:
+        shipment_id:
+          type: string
+        tracking_number:
+          type: string
+        carrier:
+          type: string
+        status:
+          type: string
+        estimated_delivery:
+          type: string
+          format: date
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              status:
+                type: string
+              location:
+                type: string
+              description:
+                type: string
+
+    Webhook:
+      type: object
+      required: [id, url, events, status]
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+            enum:
+              - order.created
+              - order.confirmed
+              - order.shipped
+              - order.delivered
+              - order.cancelled
+              - payment.captured
+              - payment.failed
+              - payment.refunded
+              - inventory.low_stock
+              - shipment.status_changed
+        secret:
+          type: string
+          description: HMAC secret for verifying webhook signatures
+        status:
+          type: string
+          enum: [active, paused, failed]
+        created_at:
+          type: string
+          format: date-time
+
+    CreateWebhookRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum:
+              - order.created
+              - order.confirmed
+              - order.shipped
+              - order.delivered
+              - order.cancelled
+              - payment.captured
+              - payment.failed
+              - payment.refunded
+              - inventory.low_stock
+              - shipment.status_changed
+
+    SalesReport:
+      type: object
+      properties:
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        total_revenue:
+          type: number
+        total_orders:
+          type: integer
+        average_order_value:
+          type: number
+        periods:
+          type: array
+          items:
+            type: object
+            properties:
+              period:
+                type: string
+              revenue:
+                type: number
+              orders:
+                type: integer
+              top_products:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    sku:
+                      type: string
+                    name:
+                      type: string
+                    quantity_sold:
+                      type: integer
+                    revenue:
+                      type: number
+
+    InventoryReport:
+      type: object
+      properties:
+        total_skus:
+          type: integer
+        total_units:
+          type: integer
+        total_value:
+          type: number
+        low_stock_count:
+          type: integer
+        out_of_stock_count:
+          type: integer
+        categories:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+              sku_count:
+                type: integer
+              total_units:
+                type: integer
+              low_stock:
+                type: integer
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        request_id:
+          type: string
+          description: Unique request ID for support inquiries
+
+  responses:
+    RateLimited:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+            example: 0
+        X-RateLimit-Reset:
+          schema:
+            type: integer
